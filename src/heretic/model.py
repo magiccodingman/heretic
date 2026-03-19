@@ -846,7 +846,7 @@ class Model:
 
         return running_sum / total_count
 
-    def _iter_residual_batches(self, prompts: list[Prompt]):
+    def _iter_residual_batches(self, prompts: list[Prompt]) -> Iterator[list[Prompt]]:
         main_batch_size = max(1, self.settings.batch_size)
         residual_batch_size = self._get_residual_batch_size()
 
