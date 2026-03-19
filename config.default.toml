@@ -74,6 +74,8 @@ residual_collection = "full"
 # "default" = use the resolved main batch size
 # "safe"    = use half of the resolved main batch size (minimum 1)
 # "<number>" = use that explicit batch size, e.g. "1", "2", "8"
+#
+# NOTE: Non-default values may introduce small numerical differences.
 residual_batch_size = "default"
 
 # Assumed "typical" value of the Kullback-Leibler divergence from the original model for abliterated models.
