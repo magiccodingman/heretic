@@ -50,9 +50,9 @@ residual_collection = "full"
 # residual_collection = "mean".
 #
 # Options:
-# "default" = use the resolved main batch size
-# "safe"    = use half of the resolved main batch size (minimum 1)
-# "<number>" = use that explicit batch size, e.g. "1", "2", "8"
+# "default" = use the resolved main batch size.
+# "safe"    = use half of the resolved main batch size (minimum 1).
+# "<number>" = use that explicit batch size, e.g. "1", "2", "8".
 #
 # NOTE: Non-default values may introduce small numerical differences.
 residual_batch_size = "default"
