@@ -50,8 +50,7 @@ residual_use_cache = true
 # "mean" = compute the residual mean batch-by-batch to reduce peak memory usage.
 residual_collection = "full"
 
-# Batch size to use for streaming residual collection when
-# residual_collection = "mean".
+# Batch size to use for streaming residual collection when residual_collection = "mean".
 #
 # Options:
 # "default" = use the resolved main batch size.
