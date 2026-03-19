@@ -815,6 +815,9 @@ class Model:
     def get_residuals_mean(self, prompts: list[Prompt]) -> Tensor:
         # Compute the per-layer residual mean incrementally instead of materializing
         # all per-prompt residual tensors at once. This reduces peak memory usage
+    def get_residuals_mean(self, prompts: list[Prompt]) -> Tensor:
+        # Compute the per-layer residual mean incrementally instead of materializing
+        # all per-prompt residual tensors at once. This reduces peak memory usage
         # while preserving the original prompt order and batch boundaries as much
         # as possible.
         running_sum = None
@@ -847,12 +850,7 @@ class Model:
 
         return running_sum / total_count
 
-
-    def _iter_residual_batches(
-        self,
-        prompts: list[Prompt],
-        residual_batch_size: int,
-    ) -> Iterator[list[Prompt]]:
+    def _iter_residual_batches(self, prompts: list[Prompt], residual_batch_size: int) -> Iterator[list[Prompt]]:
         main_batch_size = max(1, self.settings.batch_size)
 
         # If the residual batch size is at least as large as the main batch size,
@@ -862,6 +860,7 @@ class Model:
             return
 
         # Otherwise, preserve the original outer batch boundaries as much as possible
-        # and only split within each original batch.
+        # and only split within each original batch. This keeps batching semantics
+        # closer to the original implementation than globally re-batching the full list.
         for outer_batch in batchify(prompts, main_batch_size):
             yield from batchify(outer_batch, residual_batch_size)
