@@ -847,6 +847,7 @@ class Model:
 
         return running_sum / total_count
 
+
     def _iter_residual_batches(
         self,
         prompts: list[Prompt],
@@ -861,7 +862,6 @@ class Model:
             return
 
         # Otherwise, preserve the original outer batch boundaries as much as possible
-        # and only split within each original batch. This keeps batching semantics
-        # closer to the original implementation than globally re-batching the full list.
+        # and only split within each original batch.
         for outer_batch in batchify(prompts, main_batch_size):
             yield from batchify(outer_batch, residual_batch_size)
