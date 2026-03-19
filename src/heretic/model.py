@@ -829,7 +829,7 @@ class Model:
                 "the default full-batch residual pass."
             )
 
-        for batch in self._iter_residual_batches(prompts):
+        for batch in self._iter_residual_batches(prompts, residual_batch_size):
             batch_residuals = self.get_residuals(batch)
             batch_sum = batch_residuals.sum(dim=0)
 
@@ -847,9 +847,12 @@ class Model:
 
         return running_sum / total_count
 
-    def _iter_residual_batches(self, prompts: list[Prompt]) -> Iterator[list[Prompt]]:
+    def _iter_residual_batches(
+        self,
+        prompts: list[Prompt],
+        residual_batch_size: int,
+    ) -> Iterator[list[Prompt]]:
         main_batch_size = max(1, self.settings.batch_size)
-        residual_batch_size = self._get_residual_batch_size()
 
         # If the residual batch size is at least as large as the main batch size,
         # we can just iterate normally.
