@@ -40,22 +40,21 @@ max_batch_size = 128
 offload_outputs_to_cpu = false
 
 # When disabled, recomputes the full forward pass instead of using KV cache.
-# This can reduce memory usage slightly but may cause minor deviations from
-# baseline results. For best reproducibility, leave this enabled.
+# This can reduce memory usage slightly but may cause minor deviations from baseline results.
 residual_use_cache = true
 
 # Controls how residual means are collected when computing refusal directions.
 # Options:
-# "full" = original behavior; keep all per-prompt residual tensors and compute the mean afterward.
-# "mean" = compute the residual mean batch-by-batch to reduce peak memory usage.
+# "full" = Original behavior; keep all per-prompt residual tensors and compute the mean afterward.
+# "mean" = Compute the residual mean batch-by-batch to reduce peak memory usage.
 residual_collection = "full"
 
 # Batch size to use for streaming residual collection when residual_collection = "mean".
 #
 # Options:
-# "default" = use the resolved main batch size.
-# "safe"    = use half of the resolved main batch size (minimum 1).
-# "<number>" = use that explicit batch size, e.g. "1", "2", "8".
+# "default" = Use the resolved main batch size.
+# "safe"    = Use half of the resolved main batch size (minimum 1).
+# "<number>" = Use that explicit batch size, e.g. "1", "2", "8".
 #
 # NOTE: Non-default values may introduce small numerical differences.
 residual_batch_size = "default"
