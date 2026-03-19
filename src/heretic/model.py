@@ -815,9 +815,6 @@ class Model:
     def get_residuals_mean(self, prompts: list[Prompt]) -> Tensor:
         # Compute the per-layer residual mean incrementally instead of materializing
         # all per-prompt residual tensors at once. This reduces peak memory usage
-    def get_residuals_mean(self, prompts: list[Prompt]) -> Tensor:
-        # Compute the per-layer residual mean incrementally instead of materializing
-        # all per-prompt residual tensors at once. This reduces peak memory usage
         # while preserving the original prompt order and batch boundaries as much
         # as possible.
         running_sum = None
