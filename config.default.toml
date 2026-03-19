@@ -33,27 +33,6 @@ batch_size = 0  # auto
 # Maximum batch size to try when automatically determining the optimal batch size.
 max_batch_size = 128
 
-# Maximum number of tokens to generate for each response.
-max_response_length = 100
-
-# Whether to print prompt/response pairs when counting refusals.
-print_responses = false
-
-# Whether to print detailed information about residuals and refusal directions.
-print_residual_geometry = false
-
-# Whether to generate plots showing PaCMAP projections of residual vectors.
-plot_residuals = false
-
-# Base path to save plots of residual vectors to.
-residual_plot_path = "plots"
-
-# Title placed above plots of residual vectors.
-residual_plot_title = 'PaCMAP Projection of Residual Vectors for "Harmless" and "Harmful" Prompts'
-
-# Matplotlib style sheet to use for plots of residual vectors.
-residual_plot_style = "dark_background"
-
 # Move intermediate analysis tensors (such as residuals and logprobs)
 # to CPU memory as soon as possible to reduce peak VRAM usage.
 # This lowers peak VRAM usage during residual analysis and evaluation,
@@ -77,6 +56,27 @@ residual_collection = "full"
 #
 # NOTE: Non-default values may introduce small numerical differences.
 residual_batch_size = "default"
+
+# Maximum number of tokens to generate for each response.
+max_response_length = 100
+
+# Whether to print prompt/response pairs when counting refusals.
+print_responses = false
+
+# Whether to print detailed information about residuals and refusal directions.
+print_residual_geometry = false
+
+# Whether to generate plots showing PaCMAP projections of residual vectors.
+plot_residuals = false
+
+# Base path to save plots of residual vectors to.
+residual_plot_path = "plots"
+
+# Title placed above plots of residual vectors.
+residual_plot_title = 'PaCMAP Projection of Residual Vectors for "Harmless" and "Harmful" Prompts'
+
+# Matplotlib style sheet to use for plots of residual vectors.
+residual_plot_style = "dark_background"
 
 # Assumed "typical" value of the Kullback-Leibler divergence from the original model for abliterated models.
 # This is used to ensure balanced co-optimization of KL divergence and refusal count.
