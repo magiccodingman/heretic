@@ -635,7 +635,7 @@ class Model:
             return_dict_in_generate=True,
             # KV cache is unnecessary here because we only need the hidden states
             # for the first generated token.
-            use_cache=False,
+            use_cache=self.settings.residual_use_cache,
         )
 
         # This cast is valid because GenerateDecoderOnlyOutput is the return type
@@ -662,17 +662,8 @@ class Model:
         del hidden_states
         del outputs
 
-        if self.settings.offload_outputs_to_cpu:
-            # Move the final residual tensor to CPU after stacking and casting.
-            # This keeps the computation path closer to the original implementation
-            # than moving individual layer slices to CPU before stacking.
-            residuals = residuals.cpu()
-            empty_cache()
-
         if 0 <= self.settings.winsorization_quantile < 1:
-            # Apply symmetric winsorization to each layer of the per-prompt residuals.
             abs_residuals = torch.abs(residuals)
-            # Get the (prompt, layer, 1) quantiles of the (prompt, layer, component) residuals.
             thresholds = torch.quantile(
                 abs_residuals,
                 self.settings.winsorization_quantile,
@@ -680,6 +671,10 @@ class Model:
                 keepdim=True,
             )
             residuals = torch.clamp(residuals, -thresholds, thresholds)
+
+        if self.settings.offload_outputs_to_cpu:
+            residuals = residuals.cpu()
+            empty_cache()
 
         return residuals
 
@@ -712,7 +707,7 @@ class Model:
         logits = cast(tuple[FloatTensor], outputs.scores)[0]
 
         # The returned tensor has shape (prompt, token).
-        logprobs = F.log_softmax(logits, dim=-1).to(torch.float32)
+        logprobs = F.log_softmax(logits, dim=-1)
 
         del logits
         del outputs
@@ -813,10 +808,6 @@ class Model:
         return residual_batch_size
 
     def get_residuals_mean(self, prompts: list[Prompt]) -> Tensor:
-        # Compute the per-layer residual mean incrementally instead of materializing
-        # all per-prompt residual tensors at once. This reduces peak memory usage
-        # while preserving the original prompt order and batch boundaries as much
-        # as possible.
         running_sum = None
         total_count = 0
 
@@ -831,7 +822,9 @@ class Model:
 
         for batch in self._iter_residual_batches(prompts, residual_batch_size):
             batch_residuals = self.get_residuals(batch)
-            batch_sum = batch_residuals.sum(dim=0)
+
+            # High-precision accumulation, preferably on CPU
+            batch_sum = batch_residuals.sum(dim=0, dtype=torch.float64).cpu()
 
             if running_sum is None:
                 running_sum = batch_sum
@@ -845,7 +838,7 @@ class Model:
 
         assert running_sum is not None, "No prompts were provided for residual averaging."
 
-        return running_sum / total_count
+        return (running_sum / total_count).to(torch.float32)
 
     def _iter_residual_batches(self, prompts: list[Prompt], residual_batch_size: int) -> Iterator[list[Prompt]]:
         main_batch_size = max(1, self.settings.batch_size)

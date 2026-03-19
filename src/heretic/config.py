@@ -133,6 +133,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    residual_use_cache: bool = Field(
+        default=True,
+        description=(
+            "When disabled, recomputes the full forward pass instead of using KV cache. "
+            "This can reduce memory usage slightly but may cause minor deviations from "
+            "baseline results. For best reproducibility, leave this enabled."
+        ),
+    )
+
     residual_collection: str = Field(
         default="full",
         description=(
