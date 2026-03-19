@@ -489,12 +489,7 @@ def run():
             analyzer.plot_residuals()
 
     # We don't need the residuals after computing refusal directions.
-    if good_residuals is not None:
-        del good_residuals
-    if bad_residuals is not None:
-        del bad_residuals
-    if analyzer is not None:
-        del analyzer
+    del good_residuals, bad_residuals, analyzer
     empty_cache()
 
     trial_index = 0
