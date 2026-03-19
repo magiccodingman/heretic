@@ -632,6 +632,9 @@ class Model:
             max_new_tokens=1,
             output_hidden_states=True,
             return_dict_in_generate=True,
+            # KV cache is unnecessary here because we only need the hidden states
+            # for the first generated token.
+            use_cache=False,
         )
 
         # This cast is valid because GenerateDecoderOnlyOutput is the return type
@@ -642,18 +645,34 @@ class Model:
         # This cast is valid because we passed output_hidden_states=True above.
         hidden_states = cast(tuple[tuple[FloatTensor]], outputs.hidden_states)[0]
 
-        # The returned tensor has shape (prompt, layer, component).
-        residuals = torch.stack(
-            # layer_hidden_states has shape (prompt, position, component),
-            # so this extracts the hidden states at the end of each prompt,
-            # and stacks them up over the layers.
-            [layer_hidden_states[:, -1, :] for layer_hidden_states in hidden_states],
-            dim=1,
-        )
+        if self.settings.offload_outputs_to_cpu:
+            # Move per-layer residual slices to CPU immediately so they do not
+            # accumulate in VRAM during analysis.
+            residuals = torch.stack(
+                [
+                    layer_hidden_states[:, -1, :].to(torch.float32).cpu()
+                    for layer_hidden_states in hidden_states
+                ],
+                dim=1,
+            )
 
-        # Upcast the data type to avoid precision (bfloat16) or range (float16)
-        # problems during calculations involving residual vectors.
-        residuals = residuals.to(torch.float32)
+            # Free large GPU-side references as early as possible.
+            del hidden_states
+            del outputs
+            empty_cache()
+        else:
+            # The returned tensor has shape (prompt, layer, component).
+            residuals = torch.stack(
+                # layer_hidden_states has shape (prompt, position, component),
+                # so this extracts the hidden states at the end of each prompt,
+                # and stacks them up over the layers.
+                [layer_hidden_states[:, -1, :] for layer_hidden_states in hidden_states],
+                dim=1,
+            )
+
+            # Upcast the data type to avoid precision (bfloat16) or range (float16)
+            # problems during calculations involving residual vectors.
+            residuals = residuals.to(torch.float32)
 
         if 0 <= self.settings.winsorization_quantile < 1:
             # Apply symmetric winsorization to each layer of the per-prompt residuals.
@@ -665,7 +684,7 @@ class Model:
                 dim=2,
                 keepdim=True,
             )
-            return torch.clamp(residuals, -thresholds, thresholds)
+            residuals = torch.clamp(residuals, -thresholds, thresholds)
 
         return residuals
 
@@ -698,7 +717,15 @@ class Model:
         logits = cast(tuple[FloatTensor], outputs.scores)[0]
 
         # The returned tensor has shape (prompt, token).
-        return F.log_softmax(logits, dim=-1)
+        logprobs = F.log_softmax(logits, dim=-1).to(torch.float32)
+
+        if self.settings.offload_outputs_to_cpu:
+            logprobs = logprobs.cpu()
+            del logits
+            del outputs
+            empty_cache()
+
+        return logprobs
 
     def get_logprobs_batched(self, prompts: list[Prompt]) -> Tensor:
         logprobs = []
@@ -752,3 +779,111 @@ class Model:
                 skip_special_tokens=True,
             ),
         )
+
+    def get_residual_collection_mode(self) -> str:
+        mode = str(self.settings.residual_collection).strip().lower()
+
+        if mode not in ["full", "mean"]:
+            raise ValueError(
+                "Invalid residual_collection value: "
+                f"{self.settings.residual_collection!r}. "
+                'Expected "full" or "mean".'
+            )
+
+        return mode
+
+    def _get_residual_batch_size(self) -> int:
+        value = str(self.settings.residual_batch_size).strip().lower()
+        base_batch_size = max(1, self.settings.batch_size)
+
+        if value == "default":
+            return base_batch_size
+
+        if value == "safe":
+            return max(1, base_batch_size // 2)
+
+        try:
+            residual_batch_size = int(value)
+        except ValueError as error:
+            raise ValueError(
+                "Invalid residual_batch_size value: "
+                f"{self.settings.residual_batch_size!r}. "
+                'Expected "default", "safe", or a positive integer string.'
+            ) from error
+
+        if residual_batch_size < 1:
+            raise ValueError("residual_batch_size must be greater than 0.")
+
+        return residual_batch_size
+
+    def _render_prompt_for_analysis(self, prompt: Prompt) -> str:
+        # Render the prompt exactly as it will be seen by the model during analysis.
+        chat_prompt = cast(
+            str,
+            self.tokenizer.apply_chat_template(
+                [
+                    {"role": "system", "content": prompt.system},
+                    {"role": "user", "content": prompt.user},
+                ],
+                add_generation_prompt=True,
+                tokenize=False,
+            ),
+        )
+
+        if self.response_prefix:
+            # Append the common response prefix so prompt-length estimation reflects
+            # the actual prompt format used during residual analysis.
+            chat_prompt += self.response_prefix
+
+        return chat_prompt
+
+    def _sort_prompts_for_residuals(self, prompts: list[Prompt]) -> list[Prompt]:
+        # Sort prompts by tokenized length so each batch contains similarly sized prompts.
+        # This reduces padding waste during the streaming residual pass.
+        #
+        # This is only used for residual mean collection, where prompt order does not matter.
+        prompt_lengths: list[tuple[int, Prompt]] = []
+
+        for prompt in prompts:
+            rendered = self._render_prompt_for_analysis(prompt)
+            length = len(
+                self.tokenizer.encode(
+                    rendered,
+                    add_special_tokens=False,
+                )
+            )
+            prompt_lengths.append((length, prompt))
+
+        prompt_lengths.sort(key=lambda x: x[0])
+        return [prompt for _, prompt in prompt_lengths]
+
+    def get_residuals_mean(self, prompts: list[Prompt]) -> Tensor:
+        # Compute the per-layer residual mean incrementally instead of materializing
+        # all per-prompt residual tensors at once. This significantly reduces peak
+        # memory usage during refusal-direction calculation.
+        running_sum = None
+        total_count = 0
+
+        residual_batch_size = self._get_residual_batch_size()
+        print(f"* Residual pass using batch size [bold]{residual_batch_size}[/]")
+
+        # Group prompts of similar length together to reduce padding waste.
+        sorted_prompts = self._sort_prompts_for_residuals(prompts)
+
+        for batch in batchify(sorted_prompts, residual_batch_size):
+            batch_residuals = self.get_residuals(batch)
+            batch_sum = batch_residuals.sum(dim=0)
+
+            if running_sum is None:
+                running_sum = batch_sum
+            else:
+                running_sum += batch_sum
+
+            total_count += batch_residuals.shape[0]
+
+            del batch_residuals
+            del batch_sum
+
+        assert running_sum is not None, "No prompts were provided for residual averaging."
+
+        return running_sum / total_count

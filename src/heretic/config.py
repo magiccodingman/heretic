@@ -125,6 +125,33 @@ class Settings(BaseSettings):
         description="Maximum batch size to try when automatically determining the optimal batch size.",
     )
 
+    offload_outputs_to_cpu: bool = Field(
+        default=False,
+        description=(
+            "Whether to move intermediate analysis tensors (such as residuals and logprobs) "
+            "to CPU memory as soon as possible to reduce peak VRAM usage."
+        ),
+    )
+
+    residual_collection: str = Field(
+        default="full",
+        description=(
+            "How to collect residuals when computing refusal directions. Options: "
+            '"full" (keep all per-prompt residual tensors and compute the mean afterward), '
+            '"mean" (compute the residual mean batch-by-batch to reduce peak memory usage).'
+        ),
+    )
+
+    residual_batch_size: str = Field(
+        default="default",
+        description=(
+            'Batch size to use for streaming residual collection when residual_collection = "mean". '
+            'Options: "default" (use the resolved main batch size), '
+            '"safe" (use half of the resolved main batch size, minimum 1), '
+            'or a positive integer string such as "1", "2", or "8".'
+        ),
+    )
+
     max_response_length: int = Field(
         default=100,
         description="Maximum number of tokens to generate for each response.",
