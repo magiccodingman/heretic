@@ -46,8 +46,7 @@ residual_use_cache = true
 
 # Controls how residual means are collected when computing refusal directions.
 # Options:
-# "full" = original behavior; keep all per-prompt residual tensors and
-#          compute the mean afterward.
+# "full" = original behavior; keep all per-prompt residual tensors and compute the mean afterward.
 # "mean" = compute the residual mean batch-by-batch to reduce peak memory usage.
 residual_collection = "full"
 
