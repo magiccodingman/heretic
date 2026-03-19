@@ -5,6 +5,7 @@ import math
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Type, cast
+from typing import Iterator
 
 import bitsandbytes as bnb
 import torch
