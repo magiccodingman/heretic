@@ -4,6 +4,7 @@
 import math
 from contextlib import suppress
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Any, Type, cast
 
 import bitsandbytes as bnb
@@ -55,6 +56,22 @@ class AbliterationParameters:
     min_weight_distance: float
 
 
+def is_quark_qparams_linear(module: Module) -> bool:
+    """Return whether *module* is Quark's real-quantized linear module.
+
+    Quark is an optional dependency. Importing its module lazily keeps ordinary
+    Heretic installations working without requiring amd-quark.
+    """
+    try:
+        QParamsLinear = import_module(
+            "quark.torch.export.nn.modules.qparamslinear"
+        ).QParamsLinear
+    except ImportError:
+        return False
+
+    return isinstance(module, QParamsLinear)
+
+
 class Model:
     model: PreTrainedModel | PeftModel
     tokenizer: PreTrainedTokenizerBase
@@ -62,6 +79,7 @@ class Model:
     processor: ProcessorMixin | None
     peft_config: LoraConfig
     dtype: torch.dtype
+    is_quark_quantized: bool
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -168,6 +186,12 @@ class Model:
         if self.model is None:
             raise Exception("Failed to load model with all configured dtypes.")
 
+        self.is_quark_quantized = any(
+            is_quark_qparams_linear(module) for module in self.model.modules()
+        )
+        if self.is_quark_quantized:
+            print("* Quark real-quantized model detected")
+
         self._apply_lora()
 
         # LoRA B matrices are initialized to zero by default in PEFT,
@@ -266,6 +290,15 @@ class Model:
     def get_merged_model(self) -> PreTrainedModel:
         # Guard against calling this method at the wrong time.
         assert isinstance(self.model, PeftModel)
+
+        if self.is_quark_quantized:
+            raise RuntimeError(
+                "Merging a LoRA into a Quark real-quantized model with PEFT's "
+                "normal merge path is unsafe because QParamsLinear.weight contains "
+                "packed quantized data. Export the LoRA adapter instead. A future "
+                "standalone merged export must use Quark's native export and "
+                "state-dict mappings."
+            )
 
         # Check if we need special handling for quantized models
         if self.settings.quantization == QuantizationMethod.BNB_4BIT:
@@ -458,6 +491,67 @@ class Model:
 
         return sorted(components)
 
+    @staticmethod
+    def _get_dequantized_weight(module: Linear) -> Tensor:
+        """Materialize one logical base weight as FP32 for ablation analysis.
+
+        The returned tensor is temporary. In particular, this does not replace or
+        mutate a Quark QParamsLinear's packed weight parameter.
+        """
+        base_layer = module.base_layer
+        base_weight = cast(Tensor, base_layer.weight)
+
+        if is_quark_qparams_linear(base_layer):
+            weight_quantizer = getattr(base_layer, "weight_quantizer", None)
+            if weight_quantizer is None or not getattr(
+                weight_quantizer, "real_quantized", False
+            ):
+                raise RuntimeError(
+                    "Expected QParamsLinear to have a real-quantized weight quantizer."
+                )
+
+            # QParamsLinear uses this path in its own generic forward method. It
+            # unpacks the stored bytes and dequantizes them using the module's qspec,
+            # scales, zero point (if any), and pack/reorder metadata.
+            get_qweight = getattr(base_layer, "_get_qweight", None)
+            if not callable(get_qweight):
+                raise RuntimeError(
+                    "The installed amd-quark QParamsLinear does not expose "
+                    "the expected _get_qweight() dequantization path."
+                )
+            W = cast(Tensor, get_qweight(base_weight)).to(torch.float32)
+        else:
+            quant_state = getattr(base_weight, "quant_state", None)
+            if quant_state is None:
+                W = base_weight.to(torch.float32)
+            else:
+                # bitsandbytes 4-bit quantization.
+                W = cast(
+                    Tensor,
+                    bnb.functional.dequantize_4bit(  # ty:ignore[possibly-missing-attribute]
+                        base_weight.data,
+                        quant_state,
+                    ).to(torch.float32),
+                )
+
+        # Never infer the logical dimensions from base_weight.shape. Quark's
+        # serialized and runtime packing layouts may include or separate MXFP4
+        # scales differently. The nn.Linear interface remains authoritative.
+        expected_shape = (
+            getattr(base_layer, "out_features", None),
+            getattr(base_layer, "in_features", None),
+        )
+        if None in expected_shape or tuple(W.shape) != expected_shape:
+            raise RuntimeError(
+                "Dequantized base weight has an unexpected logical shape: "
+                f"got {tuple(W.shape)}, expected {expected_shape} for "
+                f"{type(base_layer).__module__}.{type(base_layer).__qualname__}. "
+                "This usually means a packed quantized weight was not dequantized "
+                "correctly."
+            )
+
+        return W
+
     def abliterate(
         self,
         residual_directions: Tensor,
@@ -526,31 +620,12 @@ class Model:
                     # lora_B = -lambda * v
                     # lora_A = v^T W
 
-                    # Use the FP32 residual direction directly (no downcast/upcast)
-                    # and move to the correct device.
-                    v = layer_residual_direction.to(module.weight.device)
-
                     # Get W (dequantize if necessary).
-                    #
-                    # FIXME: This cast is valid only under the assumption that the original
-                    #        module wrapped by the LoRA adapter has a weight attribute.
-                    #        See the comment above for why this is currently not guaranteed.
-                    base_weight = cast(Tensor, module.base_layer.weight)
-                    quant_state = getattr(base_weight, "quant_state", None)
+                    W = self._get_dequantized_weight(module)
 
-                    if quant_state is None:
-                        W = base_weight.to(torch.float32)
-                    else:
-                        # 4-bit quantization.
-                        # This cast is always valid. Type inference fails here because the
-                        # bnb.functional module is not found by ty for some reason.
-                        W = cast(
-                            Tensor,
-                            bnb.functional.dequantize_4bit(  # ty:ignore[possibly-missing-attribute]
-                                base_weight.data,
-                                quant_state,
-                            ).to(torch.float32),
-                        )
+                    # Use the FP32 residual direction directly (no downcast/upcast)
+                    # and move it to the dequantized weight's device.
+                    v = layer_residual_direction.to(W.device)
 
                     # Flatten weight matrix to (out_features, in_features).
                     W = W.view(W.shape[0], -1)
@@ -617,6 +692,14 @@ class Model:
                     weight_B = cast(Tensor, module.lora_B["default"].weight)
                     weight_A.data = lora_A.to(weight_A.dtype)
                     weight_B.data = lora_B.to(weight_B.dtype)
+
+                    # In particular for Quark MXFP4, W is a temporary logical FP32
+                    # matrix while the base_layer.weight parameter remains packed.
+                    del W, lora_A, lora_B
+                    if self.settings.row_normalization != RowNormalization.NONE:
+                        del W_row_norms
+                    if self.settings.row_normalization == RowNormalization.FULL:
+                        del W_org, U, S, Vh, sqrt_S
 
     def generate(
         self,
