@@ -103,6 +103,24 @@ def obtain_export_strategy(
     Returns an export strategy, or None if cancelled.
     """
 
+    if model.is_quark_quantized:
+        if settings.export_strategy == ExportStrategy.MERGE:
+            raise RuntimeError(
+                "Normal PEFT merging cannot safely write into packed Quark "
+                "QParamsLinear weights. Use adapter export instead; a standalone "
+                "checkpoint requires a Quark-native merged export path."
+            )
+
+        print()
+        print(
+            "The model uses packed Quark real-quantized weights. "
+            "Normal merged export is not supported safely."
+        )
+        print(
+            "Exporting the abliteration LoRA adapter without modifying the MXFP4 base."
+        )
+        return ExportStrategy.ADAPTER
+
     if (
         settings.quantization == QuantizationMethod.BNB_4BIT
         and settings.export_strategy is None
